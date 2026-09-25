@@ -30,3 +30,37 @@ Pair-wise GSB 标注任务仓库（第 12 批 / 148）。
 1. 在本仓库中完成提示词要求的全部内容。
 2. `./mvnw -q verify` 必须通过。
 3. 完成后在所属分支（A 或 B）上提交，产物快照的父提交必须是初始环境快照。
+
+## 实现说明（分支 B）
+
+引用计数资源管理组件位于 `com.example.gsb.refcount`：
+
+| 类 | 职责 |
+|----|------|
+| `RefCountedResourceManager` | 注册资源、泄漏检测（`detectLeaks`）、统计（`stats`）、弱引用回收观察 |
+| `ResourceHandle<T>` | 可引用对象；`acquire()` 计数 +1，计数归零时释放动作恰好执行一次 |
+| `ResourceRef<T>` | 单次引用；`release()`/`close()` 计数 -1，重复释放抛 `ResourceReleasedException` |
+| `LeakReport` / `ResourceStats` | 泄漏报告（含注册位置）与统计快照 |
+
+### 用法示例
+
+```java
+try (RefCountedResourceManager manager = new RefCountedResourceManager(Duration.ofSeconds(30))) {
+    ResourceHandle<byte[]> handle = manager.register("buffer", new byte[1024],
+            () -> System.out.println("released"));
+    try (ResourceRef<byte[]> ref = handle.acquire()) {   // 计数 +1
+        byte[] buf = ref.get();                          // 使用资源
+    }                                                    // 计数 -1，归零后自动释放（仅一次）
+    List<LeakReport> leaks = manager.detectLeaks();      // 超时未归零的引用（含注册位置）
+    ResourceStats stats = manager.stats();               // 含 resourcesReclaimed（GC 回收证据）
+}
+```
+
+### 验证
+
+```bash
+mvn -q verify
+```
+
+测试覆盖：计数增减、归零释放一次、重复释放报错、泄漏报告（含注册位置）、
+16 线程 × 1000 次并发获取/释放的精确计数与不提前释放、释放后弱引用被 GC 回收的证据。
